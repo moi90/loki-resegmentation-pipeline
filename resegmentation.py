@@ -75,10 +75,22 @@ def keep_largest_object(mask):
     return labels == np.argmax(areas)
 
 
+def label_ex(mask, merge_radius: Optional[int] = None):
+    if merge_radius is None:
+        return skimage.morphology.label(mask)
+
+    # Enlarge objects by merge_radius
+    label_mask = skimage.morphology.binary_dilation(
+        mask, skimage.morphology.disk(merge_radius)
+    )
+
+    # Restrict labeled segments to previous (undilated) mask
+    return skimage.morphology.label(label_mask) * mask
+
+
 def _segment(
     image,
-    min_size=None,
-    max_size=None,
+    min_size: Optional[int] = None,
     closing_radius=None,
     merge_radius=None,
 ):
@@ -99,25 +111,22 @@ def _segment(
     # Predict segmentation
     mask = skimage.future.predict_segmenter(features, classifier) == 1
 
-    # Morphological closing
+    # TODO: Morphological opening (to remove noisy pixels)
+
+    # Morphological closing (to remove small cracks)
     if closing_radius is not None:
         mask = skimage.morphology.binary_closing(
             mask, skimage.morphology.disk(closing_radius)
         )
 
-    # Enlarge segments by merge_radius
-    label_mask = (
-        skimage.morphology.binary_dilation(mask, skimage.morphology.disk(merge_radius))
-        if merge_radius is not None
-        else mask
-    )
+    # Remove small objects
+    if min_size is not None:
+        mask = skimage.morphology.remove_small_objects(
+            mask, min_size=min_size, in_place=True
+        )
 
-    # Restrict labeled segments to previous (undilated) mask
-    labels = skimage.morphology.label(label_mask) * mask
-
-    labels, _ = filter_objects_by_size(labels, min_size, max_size)
-
-    return labels
+    # Label connected components, merging components closer than merge_radius*2
+    return label_ex(mask, merge_radius)
 
 
 with open("classifier.pkl", "rb") as f:
@@ -313,8 +322,8 @@ with Pipeline() as p:
         min_size=1000,
         # 1 produces best F1 (although larger would further increase recall)
         closing_radius=1,
-        # Merge segments closer than 30px to each other to avoid over-segmentation
-        merge_radius=15,
+        # Merge segments closer than 180px to each other to avoid over-segmentation
+        merge_radius=90,
     )
 
     segment_image = Call(
